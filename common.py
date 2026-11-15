@@ -1,4 +1,5 @@
 
+# Regroupe les constantes et les fonctions partagées pour le traitement des données.
 import json
 import random
 import re

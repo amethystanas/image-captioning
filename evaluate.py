@@ -1,4 +1,5 @@
 
+# Calcule les métriques d'évaluation des captions générées.
 import argparse
 import json
 import shutil

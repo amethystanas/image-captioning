@@ -1,4 +1,5 @@
 
+# Extrait les caractéristiques visuelles des images avec ResNet-50 et CLIP.
 import argparse
 from pathlib import Path
 

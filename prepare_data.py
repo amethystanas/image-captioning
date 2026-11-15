@@ -1,4 +1,4 @@
-
+# Prépare les splits, les captions tokenisées et le vocabulaire du jeu de données.
 import argparse
 import json
 from collections import Counter
