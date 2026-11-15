@@ -1,0 +1,7 @@
+torch
+torchvision
+transformers
+pycocoevalcap
+pillow
+tqdm
+numpy

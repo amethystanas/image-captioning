@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Projet image captioning
+data/
+*.pt
+*.zip
+dataset_*.json
