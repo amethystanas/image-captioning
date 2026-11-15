@@ -1,8 +1,4 @@
-"""Code partagé par toute l'équipe : tokenizer, vocabulaire, chargement des données.
 
-Tout le monde importe ces fonctions pour que B, C et D utilisent exactement
-la même tokenisation, le même vocabulaire et les mêmes splits.
-"""
 import json
 import random
 import re

@@ -1,13 +1,4 @@
-"""Étape 2 : cache des features gelées (une seule extraction pour toute l'équipe).
 
-Usage :
-    python extract_features.py --img_dir Flickr8k/Images
-
-Produit dans data/features/ :
-    resnet50.pt        {"ids": [...], "pooled": [N, 2048], "grid": [N, 49, 2048]}  (float16)
-    clip_vit_b32.pt    {"ids": [...], "embeds": [N, 512]}  (float16, NON normalisé)
-Les lignes suivent l'ordre de "ids" (identique dans les deux fichiers).
-"""
 import argparse
 from pathlib import Path
 

@@ -1,10 +1,4 @@
-"""Étape 1 : splits Karpathy + captions tokenisées + vocabulaire (train uniquement).
 
-Usage :
-    python prepare_data.py --karpathy_json dataset_flickr8k.json --min_freq 5
-
-Produit dans data/ : splits.json, captions.json, vocab.json
-"""
 import argparse
 import json
 from collections import Counter

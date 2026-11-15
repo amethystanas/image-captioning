@@ -1,18 +1,4 @@
-"""Script d'évaluation partagé par toute l'équipe.
 
-En ligne de commande :
-    python evaluate.py --preds preds_test.json [--out results.json]
-où preds_test.json = {"<image_id>": "a dog runs on the grass", ...}
-
-En Python :
-    from evaluate import evaluate
-    scores = evaluate(preds)            # preds : dict {image_id: caption (str)}
-
-Les références viennent de data/captions.json (5 captions par image).
-Prédictions ET références passent par le même tokenizer (common.tokenize),
-donc les scores sont comparables entre tous les modèles.
-Dépendances : pycocoevalcap (METEOR nécessite Java), transformers (CLIPScore).
-"""
 import argparse
 import json
 import shutil
