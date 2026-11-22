@@ -220,5 +220,5 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Project artefacts (datasets, features, checkpoints, logs)
-data/
-outputs/
+/data/
+/outputs/
