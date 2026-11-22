@@ -15,6 +15,7 @@ from torch.optim.lr_scheduler import LambdaLR
 from clipcap.config import TrainingConfig
 from clipcap.data.dataset import CaptionBatch
 from clipcap.models.clipcap import ClipCaptionModel
+from clipcap.training.tracking import Tracker
 from clipcap.utils import get_logger, resolve_device, seed_everything
 
 logger = get_logger(__name__)
@@ -114,11 +115,14 @@ class Trainer:
         train_loader: BatchLoader,
         val_loader: BatchLoader,
         config: TrainingConfig,
+        *,
+        tracker: Tracker | None = None,
     ) -> None:
         """Prepare the optimiser and the learning-rate schedule.
 
         The schedule spans ``config.epochs`` epochs of ``len(train_loader)``
-        steps. Only parameters that require gradients are optimised.
+        steps. Only parameters that require gradients are optimised. Metrics
+        are reported to ``tracker`` when one is given.
         """
         if len(train_loader) == 0 or len(val_loader) == 0:
             raise ValueError("training and validation loaders must not be empty")
@@ -128,6 +132,7 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.state = TrainingState()
+        self.tracker = tracker
 
         parameters = model.trainable_parameters()
         if not parameters:
@@ -250,9 +255,11 @@ class Trainer:
             )
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            learning_rate = float(self.scheduler.get_last_lr()[0])
             self.scheduler.step()
             self.state.step += 1
-            self._on_step(loss.item())
+            if self.tracker is not None:
+                self.tracker.log_step(self.state.step, loss.item(), learning_rate)
             total_loss += loss.item() * tokens
             total_tokens += tokens
         return total_loss / total_tokens
@@ -287,10 +294,5 @@ class Trainer:
         self.save_checkpoint(self.last_checkpoint)
         if state.best_epoch == metrics.epoch:
             shutil.copyfile(self.last_checkpoint, self.best_checkpoint)
-        self._on_epoch(metrics)
-
-    def _on_step(self, loss: float) -> None:
-        """Extension point called after every optimisation step."""
-
-    def _on_epoch(self, metrics: EpochMetrics) -> None:
-        """Extension point called after every epoch, once the state is updated."""
+        if self.tracker is not None:
+            self.tracker.log_epoch(metrics)
