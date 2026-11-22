@@ -62,7 +62,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config -m 'not slow'"
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib -m 'not slow'"
 markers = ["slow: tests that download or load real pretrained weights"]
 filterwarnings = ["error::UserWarning:clipcap.*"]
 
