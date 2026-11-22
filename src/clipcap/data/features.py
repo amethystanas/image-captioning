@@ -201,7 +201,7 @@ def extract_features(
         tqdm(starts, desc="CLIP features", disable=not progress), start=1
     ):
         batch_names = names[start : start + batch_size]
-        embeddings = encoder.encode([_open_image(images_dir / name) for name in batch_names])
+        embeddings = encoder.encode([open_image(images_dir / name) for name in batch_names])
         if embeddings.shape[0] != len(batch_names):
             raise FeatureCacheError(
                 f"encoder returned {embeddings.shape[0]} embedding(s) for "
@@ -235,7 +235,8 @@ def _check_compatible(
         )
 
 
-def _open_image(path: Path) -> Image.Image:
+def open_image(path: Path) -> Image.Image:
+    """Open ``path`` as an RGB image, reporting unreadable files explicitly."""
     try:
         with Image.open(path) as image:
             converted: Image.Image = image.convert("RGB")

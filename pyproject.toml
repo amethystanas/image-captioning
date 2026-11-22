@@ -20,6 +20,9 @@ dependencies = [
     "pycocoevalcap>=1.2",
 ]
 
+[project.scripts]
+clipcap = "clipcap.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

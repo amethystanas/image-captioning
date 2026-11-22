@@ -65,7 +65,8 @@ def test_setup_logging_is_idempotent(clean_package_logger: logging.Logger) -> No
     setup_logging(logging.INFO)
     logger = setup_logging(logging.DEBUG)
     assert logger is clean_package_logger
-    assert len(logger.handlers) == 1
+    # Other handlers (pytest's log capture, for instance) may be attached too.
+    assert [h.get_name() for h in logger.handlers].count("clipcap-console") == 1
     assert logger.level == logging.DEBUG
 
 
