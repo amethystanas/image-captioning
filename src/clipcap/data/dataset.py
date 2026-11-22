@@ -71,7 +71,7 @@ class CaptionDataset(Dataset[tuple[Tensor, Tensor]]):
         rows = features.index()
         self._embeddings = features.embeddings
         self._rows: list[int] = []
-        self._tokens: list[Tensor] = []
+        sequences: list[list[int]] = []
         self._image_names: list[str] = []
         for name in names:
             if name not in rows:
@@ -83,10 +83,19 @@ class CaptionDataset(Dataset[tuple[Tensor, Tensor]]):
                 if not ids:
                     raise ValueError(f"caption of '{name}' has no token: {caption!r}")
                 self._rows.append(rows[name])
-                self._tokens.append(torch.tensor([*ids, eos_token_id], dtype=torch.long))
+                sequences.append([*ids, eos_token_id])
                 self._image_names.append(name)
         if not self._rows:
             raise ValueError("the dataset is empty")
+        # One padded tensor rather than one tensor per caption: worker processes
+        # started with "spawn" or "forkserver" receive each tensor through its
+        # own file descriptor, and tens of thousands of them exceed the limit.
+        self._lengths = [len(sequence) for sequence in sequences]
+        self._tokens = torch.full(
+            (len(sequences), max(self._lengths)), eos_token_id, dtype=torch.long
+        )
+        for row, sequence in enumerate(sequences):
+            self._tokens[row, : len(sequence)] = torch.tensor(sequence, dtype=torch.long)
         self.eos_token_id = eos_token_id
 
     def __len__(self) -> int:
@@ -95,7 +104,7 @@ class CaptionDataset(Dataset[tuple[Tensor, Tensor]]):
 
     def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         """Return the embedding and token ids of example ``index``."""
-        return self._embeddings[self._rows[index]], self._tokens[index]
+        return self._embeddings[self._rows[index]], self._tokens[index, : self._lengths[index]]
 
     def image_name(self, index: int) -> str:
         """Return the name of the image behind example ``index``."""

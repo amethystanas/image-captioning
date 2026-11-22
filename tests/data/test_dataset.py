@@ -132,3 +132,23 @@ def test_invalid_inputs_are_rejected(
 def test_collate_rejects_empty_batch() -> None:
     with pytest.raises(ValueError, match="empty batch"):
         collate_captions([], pad_token_id=EOS)
+
+
+@pytest.mark.parametrize("context", ["forkserver", "spawn"])
+def test_large_dataset_works_with_worker_processes(context: str) -> None:
+    """Regression: 30 000 per-caption tensors exhausted file descriptors under forkserver."""
+    names = tuple(f"{index}.jpg" for index in range(600))
+    captions = {name: [f"a dog runs {index}" for index in range(5)] for name in names}
+    dataset = CaptionDataset(
+        make_features(names), captions, names, WordTokenizer(), eos_token_id=EOS
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=500,
+        collate_fn=dataset.collate,
+        num_workers=2,
+        multiprocessing_context=context,
+    )
+    batches = list(loader)
+    assert sum(len(batch) for batch in batches) == 3000
+    assert torch.equal(batches[0].tokens[0, :5], dataset[0][1])
