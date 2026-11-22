@@ -1,8 +1,11 @@
+import itertools
+import math
+
 import pytest
 import torch
 from torch import Tensor
 
-from clipcap.generation import greedy_decode
+from clipcap.generation import beam_search, beam_search_hypotheses, greedy_decode
 from clipcap.models.clipcap import ClipCaptionModel
 from tests.helpers import make_tiny_model
 
@@ -114,3 +117,125 @@ def test_invalid_length_budget_is_rejected(max_new_tokens: int, message: str) ->
     model, embeddings = _untrained()
     with pytest.raises(ValueError, match=message):
         greedy_decode(model, embeddings, eos_token_id=EOS, max_new_tokens=max_new_tokens)
+
+
+def _sequence_log_prob(
+    model: ClipCaptionModel, embedding: Tensor, tokens: tuple[int, ...], terminated: bool
+) -> float:
+    """Log-probability of ``tokens`` (plus end-of-sequence if ``terminated``)."""
+    targets = [*tokens, EOS] if terminated else list(tokens)
+    inputs = model.prefix(embedding.unsqueeze(0))
+    if len(targets) > 1:
+        history = torch.tensor([targets[:-1]])
+        inputs = torch.cat([inputs, model.embed_tokens(history)], dim=1)
+    logits = model.gpt2(inputs_embeds=inputs).logits[0, model.prefix_length - 1 :]
+    log_probs = torch.log_softmax(logits, dim=-1)
+    return float(sum(log_probs[step, token] for step, token in enumerate(targets)))
+
+
+def test_beam_size_one_is_greedy() -> None:
+    model, embeddings = _untrained()
+    greedy = greedy_decode(model, embeddings, eos_token_id=EOS, max_new_tokens=10)
+    assert (
+        beam_search(model, embeddings, eos_token_id=EOS, max_new_tokens=10, beam_size=1) == greedy
+    )
+
+
+def test_beam_search_reproduces_memorised_captions(
+    trained: tuple[ClipCaptionModel, Tensor, list[list[int]]],
+) -> None:
+    model, embeddings, captions = trained
+    assert (
+        beam_search(model, embeddings, eos_token_id=EOS, max_new_tokens=10, beam_size=4) == captions
+    )
+
+
+@pytest.mark.parametrize("length_penalty", [0.0, 1.0])
+def test_reported_log_prob_and_score_are_those_of_the_returned_tokens(
+    length_penalty: float,
+) -> None:
+    model, embeddings = _untrained()
+    hypotheses = beam_search_hypotheses(
+        model,
+        embeddings,
+        eos_token_id=EOS,
+        max_new_tokens=6,
+        beam_size=3,
+        length_penalty=length_penalty,
+    )
+    assert len(hypotheses) == len(embeddings)
+    with torch.no_grad():
+        for embedding, found in zip(embeddings, hypotheses, strict=True):
+            expected = _sequence_log_prob(model, embedding, found.tokens, found.terminated)
+            assert found.log_prob == pytest.approx(expected, abs=1e-4)
+            length = len(found.tokens) + int(found.terminated)
+            assert found.score == pytest.approx(expected / length**length_penalty, abs=1e-4)
+            assert EOS not in found.tokens
+            assert len(found.tokens) <= 6
+
+
+def test_exhaustive_beam_finds_the_most_probable_caption() -> None:
+    """With a beam as wide as the search space, beam search is exact."""
+    vocabulary, steps = 5, 3
+    from clipcap.models.mapper import MLPMapper
+    from tests.helpers import TINY_GPT_DIM, make_tiny_gpt2
+
+    torch.manual_seed(3)
+    gpt2 = make_tiny_gpt2(seed=3, vocab_size=vocabulary)
+    for parameter in gpt2.parameters():  # sharpen the near-uniform random distribution
+        parameter.data.mul_(4.0)
+    model = ClipCaptionModel(gpt2, MLPMapper(CLIP_DIM, TINY_GPT_DIM, 3)).eval()
+    embedding = torch.randn(CLIP_DIM)
+
+    with torch.no_grad():
+        candidates: dict[tuple[tuple[int, ...], bool], float] = {}
+        non_eos = range(1, vocabulary)
+        for length in range(steps + 1):
+            for tokens in itertools.product(non_eos, repeat=length):
+                if length < steps:
+                    candidates[(tokens, True)] = _sequence_log_prob(model, embedding, tokens, True)
+                else:
+                    candidates[(tokens, False)] = _sequence_log_prob(
+                        model, embedding, tokens, False
+                    )
+    (best_tokens, best_terminated), best_log_prob = max(candidates.items(), key=lambda kv: kv[1])
+    assert math.isclose(sum(math.exp(value) for value in candidates.values()), 1.0, abs_tol=1e-4)
+
+    found = beam_search_hypotheses(
+        model,
+        embedding.unsqueeze(0),
+        eos_token_id=EOS,
+        max_new_tokens=steps,
+        beam_size=vocabulary**steps,
+        length_penalty=0.0,
+    )[0]
+    assert found.tokens == best_tokens
+    assert found.terminated is best_terminated
+    assert found.log_prob == pytest.approx(best_log_prob, abs=1e-4)
+
+
+def test_beam_search_is_independent_of_batching() -> None:
+    model, embeddings = _untrained()
+    together = beam_search(model, embeddings, eos_token_id=EOS, max_new_tokens=6, beam_size=3)
+    alone = [
+        beam_search(
+            model, embeddings[row : row + 1], eos_token_id=EOS, max_new_tokens=6, beam_size=3
+        )[0]
+        for row in range(len(embeddings))
+    ]
+    assert alone == together
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"beam_size": 0}, "beam_size must be positive"),
+        ({"length_penalty": -0.5}, "length_penalty must be non-negative"),
+        ({"max_new_tokens": 0}, "max_new_tokens must be positive"),
+    ],
+)
+def test_beam_search_rejects_invalid_arguments(kwargs: dict[str, float], message: str) -> None:
+    model, embeddings = _untrained()
+    arguments = {"max_new_tokens": 5, **kwargs}
+    with pytest.raises(ValueError, match=message):
+        beam_search(model, embeddings, eos_token_id=EOS, **arguments)  # type: ignore[arg-type]

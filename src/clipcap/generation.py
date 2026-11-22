@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor
@@ -94,3 +95,117 @@ def greedy_decode(
         eos_token_id=eos_token_id,
         max_new_tokens=max_new_tokens,
     )
+
+
+@dataclass(frozen=True)
+class BeamHypothesis:
+    """A caption found by beam search.
+
+    ``log_prob`` is the log-probability of the tokens, end-of-sequence
+    included when the caption was terminated; ``score`` is ``log_prob``
+    divided by ``length ** length_penalty`` and is what hypotheses are ranked by.
+    """
+
+    tokens: tuple[int, ...]
+    log_prob: float
+    score: float
+    terminated: bool
+
+
+def beam_search_hypotheses(
+    model: ClipCaptionModel,
+    embeddings: Tensor,
+    *,
+    eos_token_id: int,
+    max_new_tokens: int = 30,
+    beam_size: int = 5,
+    length_penalty: float = 1.0,
+) -> list[BeamHypothesis]:
+    """Return the best-scoring hypothesis of each image.
+
+    At every step the ``beam_size`` most likely continuations are kept; a
+    hypothesis that emits end-of-sequence is set aside and frees no slot, so
+    the search narrows as captions terminate. ``length_penalty`` of 0 ranks by
+    raw log-probability (favouring short captions), 1 by mean token
+    log-probability.
+    """
+    _check_budget(model, max_new_tokens)
+    if beam_size <= 0:
+        raise ValueError("beam_size must be positive")
+    if length_penalty < 0:
+        raise ValueError("length_penalty must be non-negative")
+    with torch.no_grad(), _evaluation_mode(model):
+        prefixes = model.prefix(embeddings)
+        return [
+            _beam_search_one(model, prefix, eos_token_id, max_new_tokens, beam_size, length_penalty)
+            for prefix in prefixes
+        ]
+
+
+def beam_search(
+    model: ClipCaptionModel,
+    embeddings: Tensor,
+    *,
+    eos_token_id: int,
+    max_new_tokens: int = 30,
+    beam_size: int = 5,
+    length_penalty: float = 1.0,
+) -> list[list[int]]:
+    """Return the tokens of the best beam-search hypothesis of each image."""
+    hypotheses = beam_search_hypotheses(
+        model,
+        embeddings,
+        eos_token_id=eos_token_id,
+        max_new_tokens=max_new_tokens,
+        beam_size=beam_size,
+        length_penalty=length_penalty,
+    )
+    return [list(hypothesis.tokens) for hypothesis in hypotheses]
+
+
+def _beam_search_one(
+    model: ClipCaptionModel,
+    prefix: Tensor,
+    eos_token_id: int,
+    max_new_tokens: int,
+    beam_size: int,
+    length_penalty: float,
+) -> BeamHypothesis:
+    """Beam search for one image, ``prefix`` being ``(prefix_length, gpt_dim)``."""
+
+    def hypothesis(tokens: tuple[int, ...], log_prob: float, terminated: bool) -> BeamHypothesis:
+        length = len(tokens) + int(terminated)
+        return BeamHypothesis(
+            tokens, log_prob, log_prob / max(length, 1) ** length_penalty, terminated
+        )
+
+    live: list[tuple[tuple[int, ...], float]] = [((), 0.0)]
+    done: list[BeamHypothesis] = []
+    width = beam_size
+    for _ in range(max_new_tokens):
+        inputs = prefix.unsqueeze(0).expand(len(live), -1, -1)
+        if live[0][0]:
+            tokens = torch.tensor([beam for beam, _ in live], device=prefix.device)
+            inputs = torch.cat([inputs, model.embed_tokens(tokens)], dim=1)
+        log_probs = torch.log_softmax(_next_token_logits(model, inputs), dim=-1)
+        totals = torch.tensor(
+            [total for _, total in live], device=prefix.device, dtype=log_probs.dtype
+        )
+        candidates = (totals.unsqueeze(1) + log_probs).flatten()
+        best = torch.topk(candidates, min(width, candidates.numel()))
+        vocabulary = log_probs.shape[1]
+
+        next_live: list[tuple[tuple[int, ...], float]] = []
+        for total, flat_index in zip(best.values.tolist(), best.indices.tolist(), strict=True):
+            beam, token = live[flat_index // vocabulary][0], flat_index % vocabulary
+            if token == eos_token_id:
+                done.append(hypothesis(beam, total, True))
+                width -= 1
+            else:
+                next_live.append(((*beam, token), total))
+        live = next_live
+        if not live:
+            break
+
+    done.extend(hypothesis(beam, total, False) for beam, total in live)
+    return max(done, key=lambda item: item.score)
