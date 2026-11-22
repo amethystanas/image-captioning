@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import torch
+from transformers import GPT2Config, GPT2LMHeadModel
 
+from clipcap.config import ModelConfig
 from clipcap.data.features import FeatureSet
+from clipcap.models.clipcap import ClipCaptionModel
+from clipcap.models.mapper import build_mapper
 
 
 class WordTokenizer:
@@ -40,3 +44,44 @@ def make_features(names: tuple[str, ...], dim: int = 8, seed: int = 0) -> Featur
         torch.randn(len(names), dim, generator=generator), dim=-1
     )
     return FeatureSet(names, embeddings, "fake-clip", True)
+
+
+TINY_VOCAB = 40
+TINY_GPT_DIM = 16
+
+
+def make_tiny_gpt2(seed: int = 0, vocab_size: int = TINY_VOCAB) -> GPT2LMHeadModel:
+    """Return a randomly initialised two-layer GPT-2, built without network access."""
+    torch.manual_seed(seed)
+    config = GPT2Config(
+        vocab_size=vocab_size,
+        n_positions=32,
+        n_embd=TINY_GPT_DIM,
+        n_layer=2,
+        n_head=2,
+        bos_token_id=0,
+        eos_token_id=0,
+    )
+    return GPT2LMHeadModel(config)
+
+
+def make_tiny_model(
+    *,
+    clip_dim: int = 8,
+    prefix_length: int = 3,
+    freeze_gpt2: bool = True,
+    mapper_type: str = "mlp",
+    seed: int = 0,
+) -> ClipCaptionModel:
+    """Return a tiny captioning model in evaluation mode."""
+    gpt2 = make_tiny_gpt2(seed)
+    config = ModelConfig(
+        mapper_type=mapper_type,
+        prefix_length=prefix_length,
+        freeze_gpt2=freeze_gpt2,
+        mapper_num_layers=1,
+        mapper_num_heads=2,
+    )
+    mapper = build_mapper(config, clip_dim, TINY_GPT_DIM)
+    model = ClipCaptionModel(gpt2, mapper, freeze_gpt2=freeze_gpt2)
+    return model.eval()
