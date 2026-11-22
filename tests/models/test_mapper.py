@@ -2,7 +2,8 @@ import pytest
 import torch
 from torch import nn
 
-from clipcap.models.mapper import MLPMapper
+from clipcap.config import ModelConfig
+from clipcap.models.mapper import MLPMapper, TransformerMapper, build_mapper
 
 CLIP_DIM, GPT_DIM, PREFIX = 12, 16, 5
 
@@ -11,7 +12,11 @@ def _mlp() -> nn.Module:
     return MLPMapper(CLIP_DIM, GPT_DIM, PREFIX)
 
 
-MAPPERS = {"mlp": _mlp}
+def _transformer() -> nn.Module:
+    return TransformerMapper(CLIP_DIM, GPT_DIM, PREFIX, num_layers=2, num_heads=4)
+
+
+MAPPERS = {"mlp": _mlp, "transformer": _transformer}
 
 
 @pytest.fixture(params=sorted(MAPPERS))
@@ -70,3 +75,48 @@ def test_mlp_rejects_invalid_sizes(kwargs: dict[str, float], message: str) -> No
     arguments = {"clip_dim": CLIP_DIM, "gpt_dim": GPT_DIM, "prefix_length": PREFIX, **kwargs}
     with pytest.raises(ValueError, match=message):
         MLPMapper(**arguments)  # type: ignore[arg-type]
+
+
+def test_transformer_prefix_depends_on_the_image_through_attention() -> None:
+    torch.manual_seed(0)
+    mapper = TransformerMapper(CLIP_DIM, GPT_DIM, PREFIX, num_layers=1, num_heads=4).eval()
+    embeddings = torch.randn(1, CLIP_DIM, requires_grad=True)
+    mapper(embeddings)[0, -1].sum().backward()
+    assert embeddings.grad is not None
+    assert embeddings.grad.abs().sum() > 0
+
+
+def test_transformer_dropout_is_inactive_in_eval_mode() -> None:
+    mapper = TransformerMapper(CLIP_DIM, GPT_DIM, PREFIX, num_layers=1, num_heads=4, dropout=0.5)
+    embeddings = torch.randn(2, CLIP_DIM)
+    mapper.eval()
+    assert torch.equal(mapper(embeddings), mapper(embeddings))
+    mapper.train()
+    assert not torch.equal(mapper(embeddings), mapper(embeddings))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"num_heads": 3}, "divisible by num_heads"),
+        ({"num_layers": 0}, "num_layers must be positive"),
+        ({"num_heads": 0}, "num_heads must be positive"),
+    ],
+)
+def test_transformer_rejects_invalid_sizes(kwargs: dict[str, int], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        TransformerMapper(CLIP_DIM, GPT_DIM, PREFIX, **kwargs)
+
+
+def test_build_mapper_follows_the_configuration() -> None:
+    mlp = build_mapper(ModelConfig(mapper_type="mlp", prefix_length=3), CLIP_DIM, GPT_DIM)
+    assert isinstance(mlp, MLPMapper)
+    assert mlp.prefix_length == 3
+
+    config = ModelConfig(
+        mapper_type="transformer", prefix_length=4, mapper_num_layers=2, mapper_num_heads=2
+    )
+    transformer = build_mapper(config, CLIP_DIM, GPT_DIM)
+    assert isinstance(transformer, TransformerMapper)
+    assert len(transformer.encoder.layers) == 2
+    assert transformer(torch.randn(2, CLIP_DIM)).shape == (2, 4, GPT_DIM)
