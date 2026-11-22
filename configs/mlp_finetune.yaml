@@ -1,0 +1,27 @@
+# ClipCap "MLP + GPT-2 tuning" variant: MLP mapper, GPT-2 fine-tuned end to end.
+data:
+  root: data/flickr8k
+  features_dir: data/features/clip-vit-base-patch32
+  max_caption_tokens: 40
+  num_workers: 4
+
+model:
+  clip_name: openai/clip-vit-base-patch32
+  gpt2_name: gpt2
+  mapper_type: mlp
+  prefix_length: 10
+  freeze_gpt2: false
+
+training:
+  output_dir: outputs/mlp_finetune
+  epochs: 10
+  batch_size: 40
+  learning_rate: 2.0e-5
+  warmup_steps: 500
+  patience: 3
+  seed: 42
+
+generation:
+  strategy: beam
+  beam_size: 5
+  max_new_tokens: 30
