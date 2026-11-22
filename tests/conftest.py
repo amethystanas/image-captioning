@@ -3,9 +3,14 @@
 from pathlib import Path
 
 import pytest
+import torch
 from PIL import Image
 
 from clipcap.data.flickr8k import CAPTIONS_PER_IMAGE
+
+# The models under test are tiny: one thread is faster than paying for thread
+# synchronisation, and it keeps timings stable on shared CI runners.
+torch.set_num_threads(1)
 
 SPLIT_FILES = {
     "train": "Flickr_8k.trainImages.txt",
