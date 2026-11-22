@@ -106,6 +106,7 @@ class GenerationConfig:
     strategy: str = "beam"
     max_new_tokens: int = 30
     beam_size: int = 5
+    length_penalty: float = 1.0
     top_p: float = 0.9
     temperature: float = 1.0
 
@@ -117,6 +118,7 @@ class GenerationConfig:
         )
         _require(self.max_new_tokens > 0, "generation.max_new_tokens must be positive")
         _require(self.beam_size > 0, "generation.beam_size must be positive")
+        _require(self.length_penalty >= 0, "generation.length_penalty must be non-negative")
         _require(0.0 < self.top_p <= 1.0, "generation.top_p must be in (0, 1]")
         _require(self.temperature > 0, "generation.temperature must be positive")
 

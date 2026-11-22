@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from clipcap.config import GenerationConfig
 from clipcap.models.clipcap import ClipCaptionModel
 
 
@@ -209,3 +210,83 @@ def _beam_search_one(
 
     done.extend(hypothesis(beam, total, False) for beam, total in live)
     return max(done, key=lambda item: item.score)
+
+
+def nucleus_probabilities(logits: Tensor, *, top_p: float, temperature: float = 1.0) -> Tensor:
+    """Return the renormalised distribution restricted to the nucleus.
+
+    The nucleus is the smallest set of most likely tokens whose total
+    probability reaches ``top_p``; it always contains the most likely token.
+    """
+    if not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must be in (0, 1]")
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+    probabilities = torch.softmax(logits / temperature, dim=-1)
+    ordered, order = probabilities.sort(dim=-1, descending=True)
+    mass_before = ordered.cumsum(dim=-1) - ordered
+    ordered = ordered.masked_fill(mass_before >= top_p, 0.0)
+    kept = torch.zeros_like(probabilities).scatter(-1, order, ordered)
+    return kept / kept.sum(dim=-1, keepdim=True)
+
+
+def nucleus_sample(
+    model: ClipCaptionModel,
+    embeddings: Tensor,
+    *,
+    eos_token_id: int,
+    max_new_tokens: int = 30,
+    top_p: float = 0.9,
+    temperature: float = 1.0,
+    generator: torch.Generator | None = None,
+) -> list[list[int]]:
+    """Sample each token from the nucleus of the next-token distribution.
+
+    Pass a seeded CPU ``generator`` for reproducible captions.
+    """
+    nucleus_probabilities(torch.zeros(1, 1), top_p=top_p, temperature=temperature)  # validate
+
+    def select(logits: Tensor) -> Tensor:
+        probabilities = nucleus_probabilities(logits, top_p=top_p, temperature=temperature)
+        # Sampling happens on CPU so that one generator works on every device.
+        choice = torch.multinomial(probabilities.cpu(), num_samples=1, generator=generator)
+        return choice.squeeze(-1).to(logits.device)
+
+    return _decode_stepwise(
+        model, embeddings, select, eos_token_id=eos_token_id, max_new_tokens=max_new_tokens
+    )
+
+
+def generate(
+    model: ClipCaptionModel,
+    embeddings: Tensor,
+    config: GenerationConfig,
+    *,
+    eos_token_id: int,
+    generator: torch.Generator | None = None,
+) -> list[list[int]]:
+    """Decode captions with the strategy described by ``config``."""
+    if config.strategy == "greedy":
+        return greedy_decode(
+            model, embeddings, eos_token_id=eos_token_id, max_new_tokens=config.max_new_tokens
+        )
+    if config.strategy == "beam":
+        return beam_search(
+            model,
+            embeddings,
+            eos_token_id=eos_token_id,
+            max_new_tokens=config.max_new_tokens,
+            beam_size=config.beam_size,
+            length_penalty=config.length_penalty,
+        )
+    if config.strategy == "nucleus":
+        return nucleus_sample(
+            model,
+            embeddings,
+            eos_token_id=eos_token_id,
+            max_new_tokens=config.max_new_tokens,
+            top_p=config.top_p,
+            temperature=config.temperature,
+            generator=generator,
+        )
+    raise ValueError(f"unknown decoding strategy '{config.strategy}'")  # pragma: no cover

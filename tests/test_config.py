@@ -88,6 +88,7 @@ def test_invalid_yaml_is_reported(tmp_path: Path) -> None:
         ("data: {max_caption_tokens: 0}", "max_caption_tokens"),
         ("generation: {strategy: random}", "strategy"),
         ("generation: {top_p: 0.0}", "top_p"),
+        ("generation: {length_penalty: -1}", "length_penalty"),
         ("generation: {temperature: 0}", "temperature"),
     ],
 )

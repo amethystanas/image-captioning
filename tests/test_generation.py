@@ -5,7 +5,15 @@ import pytest
 import torch
 from torch import Tensor
 
-from clipcap.generation import beam_search, beam_search_hypotheses, greedy_decode
+from clipcap.config import GenerationConfig
+from clipcap.generation import (
+    beam_search,
+    beam_search_hypotheses,
+    generate,
+    greedy_decode,
+    nucleus_probabilities,
+    nucleus_sample,
+)
 from clipcap.models.clipcap import ClipCaptionModel
 from tests.helpers import make_tiny_model
 
@@ -239,3 +247,125 @@ def test_beam_search_rejects_invalid_arguments(kwargs: dict[str, float], message
     arguments = {"max_new_tokens": 5, **kwargs}
     with pytest.raises(ValueError, match=message):
         beam_search(model, embeddings, eos_token_id=EOS, **arguments)  # type: ignore[arg-type]
+
+
+HAND_LOGITS = torch.log(torch.tensor([[0.15, 0.5, 0.05, 0.3]]))
+
+
+@pytest.mark.parametrize(
+    ("top_p", "expected"),
+    [
+        (1.0, [0.15, 0.5, 0.05, 0.3]),
+        (0.9, [0.15 / 0.95, 0.5 / 0.95, 0.0, 0.3 / 0.95]),
+        (0.7, [0.0, 0.625, 0.0, 0.375]),
+        (0.49, [0.0, 1.0, 0.0, 0.0]),
+        (0.51, [0.0, 0.625, 0.0, 0.375]),
+        (1e-6, [0.0, 1.0, 0.0, 0.0]),
+    ],
+)
+def test_nucleus_keeps_the_smallest_set_reaching_top_p(top_p: float, expected: list[float]) -> None:
+    probabilities = nucleus_probabilities(HAND_LOGITS, top_p=top_p)
+    assert torch.allclose(probabilities, torch.tensor([expected]), atol=1e-5)
+
+
+def test_temperature_sharpens_or_flattens_the_distribution() -> None:
+    cold = nucleus_probabilities(HAND_LOGITS, top_p=1.0, temperature=0.05)
+    hot = nucleus_probabilities(HAND_LOGITS, top_p=1.0, temperature=100.0)
+    assert cold[0, 1] > 0.999
+    assert torch.allclose(hot, torch.full((1, 4), 0.25), atol=0.02)
+
+
+def test_nucleus_handles_batches_row_by_row() -> None:
+    logits = torch.cat([HAND_LOGITS, HAND_LOGITS.flip(-1)])
+    probabilities = nucleus_probabilities(logits, top_p=0.7)
+    assert torch.allclose(probabilities[1], probabilities[0].flip(-1), atol=1e-6)
+    assert torch.allclose(probabilities.sum(dim=-1), torch.ones(2))
+
+
+def test_sampling_is_reproducible_with_a_seeded_generator() -> None:
+    model, embeddings = _untrained()
+
+    def sample(seed: int) -> list[list[int]]:
+        return nucleus_sample(
+            model,
+            embeddings,
+            eos_token_id=EOS,
+            max_new_tokens=10,
+            generator=torch.Generator().manual_seed(seed),
+        )
+
+    assert sample(0) == sample(0)
+    assert sample(0) != sample(1)
+
+
+@pytest.mark.parametrize("kwargs", [{"top_p": 1e-6}, {"top_p": 1.0, "temperature": 1e-4}])
+def test_degenerate_sampling_is_greedy(kwargs: dict[str, float]) -> None:
+    model, embeddings = _untrained()
+    sampled = nucleus_sample(
+        model,
+        embeddings,
+        eos_token_id=EOS,
+        max_new_tokens=10,
+        generator=torch.Generator().manual_seed(0),
+        **kwargs,
+    )
+    assert sampled == greedy_decode(model, embeddings, eos_token_id=EOS, max_new_tokens=10)
+
+
+def test_sampled_captions_respect_length_limit_and_never_contain_eos() -> None:
+    model, embeddings = _untrained()
+    sampled = nucleus_sample(
+        model,
+        embeddings,
+        eos_token_id=EOS,
+        max_new_tokens=7,
+        top_p=1.0,
+        generator=torch.Generator().manual_seed(0),
+    )
+    assert all(len(tokens) <= 7 and EOS not in tokens for tokens in sampled)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"top_p": 0.0}, "top_p must be in"),
+        ({"top_p": 1.5}, "top_p must be in"),
+        ({"temperature": 0.0}, "temperature must be positive"),
+    ],
+)
+def test_nucleus_rejects_invalid_arguments(kwargs: dict[str, float], message: str) -> None:
+    model, embeddings = _untrained()
+    with pytest.raises(ValueError, match=message):
+        nucleus_sample(model, embeddings, eos_token_id=EOS, max_new_tokens=5, **kwargs)
+
+
+def test_generate_dispatches_on_the_configured_strategy() -> None:
+    model, embeddings = _untrained()
+    greedy = generate(
+        model, embeddings, GenerationConfig(strategy="greedy", max_new_tokens=6), eos_token_id=EOS
+    )
+    assert greedy == greedy_decode(model, embeddings, eos_token_id=EOS, max_new_tokens=6)
+
+    beam_config = GenerationConfig(
+        strategy="beam", max_new_tokens=6, beam_size=3, length_penalty=0.5
+    )
+    assert generate(model, embeddings, beam_config, eos_token_id=EOS) == beam_search(
+        model, embeddings, eos_token_id=EOS, max_new_tokens=6, beam_size=3, length_penalty=0.5
+    )
+
+    nucleus_config = GenerationConfig(strategy="nucleus", max_new_tokens=6, top_p=0.8)
+    sampled = generate(
+        model,
+        embeddings,
+        nucleus_config,
+        eos_token_id=EOS,
+        generator=torch.Generator().manual_seed(4),
+    )
+    assert sampled == nucleus_sample(
+        model,
+        embeddings,
+        eos_token_id=EOS,
+        max_new_tokens=6,
+        top_p=0.8,
+        generator=torch.Generator().manual_seed(4),
+    )
