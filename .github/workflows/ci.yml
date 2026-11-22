@@ -35,4 +35,5 @@ jobs:
       - name: Type-check
         run: mypy
       - name: Test
-        run: pytest --cov --cov-report=term-missing
+        # Java-backed METEOR tests are skipped by default locally; run them here.
+        run: pytest -m "not slow" --cov --cov-report=term-missing
