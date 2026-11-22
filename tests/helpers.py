@@ -30,7 +30,8 @@ class WordTokenizer:
         return ids
 
     def decode(self, ids: list[int]) -> str:
-        return " ".join(self._words[index] for index in ids)
+        known = len(self._words)
+        return " ".join(self._words[i] if i < known else f"<unk{i}>" for i in ids)
 
     @property
     def vocab_size(self) -> int:
