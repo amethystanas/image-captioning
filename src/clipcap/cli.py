@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from clipcap import __version__
-from clipcap.config import ConfigError, ExperimentConfig
+from clipcap.config import DECODING_STRATEGIES, ConfigError, ExperimentConfig
 from clipcap.data.download import DatasetError, download_flickr8k
 from clipcap.data.features import FeatureCacheError
 from clipcap.data.flickr8k import CaptionFormatError
@@ -67,6 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--checkpoint", type=Path, help="defaults to the run's best checkpoint")
     evaluate.add_argument("--output", type=Path, help="where to write the JSON report")
     evaluate.add_argument("--meteor", action="store_true", help="also compute METEOR (needs Java)")
+    evaluate.add_argument(
+        "--strategy",
+        choices=DECODING_STRATEGIES,
+        help="decoding strategy, overriding generation.strategy of the configuration",
+    )
 
     caption = command("caption", "Caption image files with a trained model.")
     caption.add_argument("images", type=Path, nargs="+", help="image files")
@@ -110,6 +116,9 @@ def _dispatch(
             f"{state.best_val_loss:.4f} at epoch {state.best_epoch}"
         )
     elif arguments.command == "evaluate":
+        if arguments.strategy is not None:
+            generation = dataclasses.replace(config.generation, strategy=arguments.strategy)
+            config = dataclasses.replace(config, generation=generation)
         result = run_evaluate(
             config,
             components,

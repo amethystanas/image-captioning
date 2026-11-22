@@ -1,5 +1,6 @@
 """The experiment files shipped in ``configs/`` and the launch script."""
 
+import dataclasses
 import shutil
 import subprocess
 from pathlib import Path
@@ -43,6 +44,20 @@ def test_experiments_share_data_and_differ_only_where_intended() -> None:
     assert (
         len({(c.model.clip_name, c.model.gpt2_name, c.model.prefix_length) for c in configs}) == 1
     )
+
+
+@pytest.mark.parametrize("prefix_length", [5, 20, 40])
+def test_prefix_ablations_only_change_the_prefix_length(prefix_length: int) -> None:
+    baseline = ExperimentConfig.from_yaml(ROOT / "configs" / "mlp_frozen.yaml")
+    ablation = ExperimentConfig.from_yaml(
+        ROOT / "configs" / "ablations" / f"prefix_{prefix_length}.yaml"
+    )
+    assert ablation.model == dataclasses.replace(baseline.model, prefix_length=prefix_length)
+    assert ablation.training == dataclasses.replace(
+        baseline.training, output_dir=Path(f"outputs/ablations/prefix_{prefix_length}")
+    )
+    assert ablation.data == baseline.data
+    assert ablation.generation == baseline.generation
 
 
 def test_launch_script_is_executable_and_syntactically_valid() -> None:

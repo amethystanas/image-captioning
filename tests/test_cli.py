@@ -116,6 +116,21 @@ def test_evaluate_prints_scores_and_writes_the_report(
     assert json.loads(custom.read_text(encoding="utf-8"))["split"] == "val"
 
 
+def test_evaluate_strategy_option_overrides_the_configuration(
+    components: Components, config_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(components, "extract", "--config", config_path)
+    _run(components, "train", "--config", config_path)
+    for strategy in ("beam", "nucleus"):
+        assert _run(components, "evaluate", "--config", config_path, "--strategy", strategy) == 0
+        path = tmp_path / "run" / f"eval_test_{strategy}.json"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        assert report["generation"]["strategy"] == strategy
+    # The run's stored configuration is left untouched.
+    stored = ExperimentConfig.from_yaml(tmp_path / "run" / "config.yaml")
+    assert stored.generation.strategy == "greedy"
+
+
 def test_caption_prints_one_line_per_image(
     components: Components,
     config_path: Path,
