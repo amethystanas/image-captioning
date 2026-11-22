@@ -131,6 +131,25 @@ def test_evaluate_strategy_option_overrides_the_configuration(
     assert stored.generation.strategy == "greedy"
 
 
+def test_report_prints_a_comparison_table(
+    components: Components, config_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(components, "extract", "--config", config_path)
+    _run(components, "train", "--config", config_path)
+    for strategy in ("greedy", "beam"):
+        _run(components, "evaluate", "--config", config_path, "--strategy", strategy)
+    capsys.readouterr()
+
+    reports = [tmp_path / "run" / f"eval_test_{strategy}.json" for strategy in ("greedy", "beam")]
+    assert _run(None, "report", *reports) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("| Run | Split | Decoding | BLEU-1 |")
+    assert [line.split(" | ")[2] for line in lines[2:]] == ["greedy", "beam (5)"]
+
+    assert _run(None, "report", tmp_path / "run" / "config.yaml") == 2
+    assert "is not an evaluation report" in capsys.readouterr().err
+
+
 def test_caption_prints_one_line_per_image(
     components: Components,
     config_path: Path,

@@ -14,6 +14,7 @@ from clipcap.data.download import DatasetError, download_flickr8k
 from clipcap.data.features import FeatureCacheError
 from clipcap.data.flickr8k import CaptionFormatError
 from clipcap.data.splits import SPLIT_NAMES, SplitError
+from clipcap.evaluation.report import ReportError, results_table
 from clipcap.pipeline import (
     Components,
     PipelineError,
@@ -37,6 +38,7 @@ _USER_ERRORS = (
     CheckpointError,
     RunDirectoryError,
     PipelineError,
+    ReportError,
     FileNotFoundError,
 )
 
@@ -77,6 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
     caption = command("caption", "Caption image files with a trained model.")
     caption.add_argument("images", type=Path, nargs="+", help="image files")
     caption.add_argument("--checkpoint", type=Path, help="defaults to the run's best checkpoint")
+
+    report = commands.add_parser(
+        "report",
+        help="Print a Markdown table comparing evaluation reports.",
+        description="Print a Markdown table comparing evaluation reports.",
+    )
+    report.add_argument("reports", type=Path, nargs="+", help="eval_*.json files")
     return parser
 
 
@@ -89,8 +98,11 @@ def main(argv: Sequence[str] | None = None, components: Components | None = None
     arguments = build_parser().parse_args(argv)
     setup_logging("DEBUG" if arguments.verbose else "INFO")
     try:
-        config = ExperimentConfig.from_yaml(arguments.config)
-        _dispatch(arguments, config, components)
+        if arguments.command == "report":
+            print(results_table(arguments.reports), end="")
+        else:
+            config = ExperimentConfig.from_yaml(arguments.config)
+            _dispatch(arguments, config, components)
     except _USER_ERRORS as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
