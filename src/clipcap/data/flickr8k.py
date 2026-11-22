@@ -1,8 +1,8 @@
-"""Flickr8k caption files: parsing and text normalisation.
+r"""Flickr8k caption files: parsing and text normalisation.
 
 Two distributions of the annotations are supported:
 
-* the original ``Flickr8k.token.txt`` (``<image>#<index>\\t<caption>`` per line);
+* the original ``Flickr8k.token.txt`` (``<image>#<index>\t<caption>`` per line);
 * the Kaggle ``captions.txt`` (CSV with an ``image,caption`` header).
 """
 
