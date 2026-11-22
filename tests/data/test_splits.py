@@ -90,7 +90,11 @@ def test_malformed_karpathy_files_are_rejected(tmp_path: Path, text: str, messag
 
 
 def test_load_split_files(tmp_path: Path) -> None:
-    for name, content in {"train": "a.jpg\nb.jpg\n", "val": "c.jpg\n\n", "test": " d.jpg \n"}.items():
+    for name, content in {
+        "train": "a.jpg\nb.jpg\n",
+        "val": "c.jpg\n\n",
+        "test": " d.jpg \n",
+    }.items():
         (tmp_path / f"{name}.txt").write_text(content, encoding="utf-8")
     splits = load_split_files(tmp_path / "train.txt", tmp_path / "val.txt", tmp_path / "test.txt")
     assert splits == Splits(train=("a.jpg", "b.jpg"), val=("c.jpg",), test=("d.jpg",))
