@@ -1,78 +1,14 @@
 """Each command of the CLI, run offline with tiny stand-in models."""
 
 import json
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-import torch
-import yaml
-from PIL import Image
-from torch import Tensor
 
 from clipcap import __version__
 from clipcap.cli import main
-from clipcap.config import ExperimentConfig, ModelConfig
-from clipcap.models.clipcap import ClipCaptionModel
-from clipcap.models.mapper import build_mapper
+from clipcap.config import ExperimentConfig
 from clipcap.pipeline import Components, PipelineError, run_caption, run_evaluate
-from tests.helpers import TINY_GPT_DIM, WordTokenizer, make_tiny_gpt2
-
-CLIP_DIM = 6
-
-
-class ColourEncoder:
-    """Stand-in for CLIP: embeds an image from its mean colour."""
-
-    name = "fake-clip"
-
-    def encode(self, images: Sequence[Image.Image]) -> Tensor:
-        rows = []
-        for image in images:
-            red, green, blue = image.resize((1, 1)).getpixel((0, 0))  # type: ignore[misc]
-            rows.append([red, green, blue, red + green, green + blue, 255.0])
-        return torch.tensor(rows) / 255.0
-
-
-def _tiny_model(config: ModelConfig, clip_dim: int) -> ClipCaptionModel:
-    gpt2 = make_tiny_gpt2(seed=0)
-    return ClipCaptionModel(
-        gpt2, build_mapper(config, clip_dim, TINY_GPT_DIM), freeze_gpt2=config.freeze_gpt2
-    )
-
-
-@pytest.fixture
-def components() -> Components:
-    tokenizer = WordTokenizer()  # shared, so that training and decoding agree on ids
-    return Components(
-        encoder=lambda config, device: ColourEncoder(),
-        tokenizer=lambda config: tokenizer,
-        model=_tiny_model,
-    )
-
-
-@pytest.fixture
-def config_path(tiny_flickr8k: Path, tmp_path: Path) -> Path:
-    config = {
-        "data": {
-            "root": str(tiny_flickr8k),
-            "features_dir": str(tmp_path / "features"),
-            "num_workers": 0,
-        },
-        "model": {"prefix_length": 3, "freeze_gpt2": False},
-        "training": {
-            "output_dir": str(tmp_path / "run"),
-            "epochs": 2,
-            "batch_size": 8,
-            "learning_rate": 5e-3,
-            "warmup_steps": 1,
-            "device": "cpu",
-        },
-        "generation": {"strategy": "greedy", "max_new_tokens": 10},
-    }
-    path = tmp_path / "experiment.yaml"
-    path.write_text(yaml.safe_dump(config), encoding="utf-8")
-    return path
 
 
 def _run(components: Components, *arguments: object) -> int:

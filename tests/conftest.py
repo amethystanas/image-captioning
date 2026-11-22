@@ -7,6 +7,7 @@ import torch
 from PIL import Image
 
 from clipcap.data.flickr8k import CAPTIONS_PER_IMAGE
+from clipcap.pipeline import Components
 
 # The models under test are tiny: one thread is faster than paying for thread
 # synchronisation, and it keeps timings stable on shared CI runners.
@@ -50,3 +51,49 @@ def build_tiny_flickr8k(root: Path) -> Path:
 def tiny_flickr8k(tmp_path: Path) -> Path:
     """Root directory of a miniature Flickr8k (4 train, 2 val, 2 test images)."""
     return build_tiny_flickr8k(tmp_path / "flickr8k")
+
+
+@pytest.fixture
+def components() -> Components:
+    """Offline stand-ins for CLIP, the GPT-2 tokenizer and GPT-2."""
+    from tests.helpers import make_offline_components
+
+    return make_offline_components()
+
+
+def write_experiment_config(path: Path, dataset_root: Path, **sections: dict[str, object]) -> Path:
+    """Write a small CPU experiment under ``path.parent`` and return ``path``.
+
+    ``sections`` overrides keys of the ``model``, ``training`` and
+    ``generation`` sections.
+    """
+    import yaml
+
+    config: dict[str, dict[str, object]] = {
+        "data": {
+            "root": str(dataset_root),
+            "features_dir": str(path.parent / "features"),
+            "num_workers": 0,
+        },
+        "model": {"prefix_length": 3, "freeze_gpt2": False},
+        "training": {
+            "output_dir": str(path.parent / "run"),
+            "epochs": 2,
+            "batch_size": 8,
+            "learning_rate": 5e-3,
+            "warmup_steps": 1,
+            "device": "cpu",
+        },
+        "generation": {"strategy": "greedy", "max_new_tokens": 10},
+    }
+    for section, overrides in sections.items():
+        config[section].update(overrides)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def config_path(tiny_flickr8k: Path, tmp_path: Path) -> Path:
+    """A two-epoch CPU experiment on the miniature dataset."""
+    return write_experiment_config(tmp_path / "experiment.yaml", tiny_flickr8k)

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
+from PIL import Image
+from torch import Tensor
 from transformers import GPT2Config, GPT2LMHeadModel
 
 from clipcap.config import ModelConfig
 from clipcap.data.features import FeatureSet
 from clipcap.models.clipcap import ClipCaptionModel
 from clipcap.models.mapper import build_mapper
+from clipcap.pipeline import Components
 
 
 class WordTokenizer:
@@ -86,3 +91,32 @@ def make_tiny_model(
     mapper = build_mapper(config, clip_dim, TINY_GPT_DIM)
     model = ClipCaptionModel(gpt2, mapper, freeze_gpt2=freeze_gpt2)
     return model.eval()
+
+
+class ColourEncoder:
+    """Stand-in for CLIP: embeds an image from its mean colour."""
+
+    name = "fake-clip"
+
+    def encode(self, images: Sequence[Image.Image]) -> Tensor:
+        rows = []
+        for image in images:
+            red, green, blue = image.resize((1, 1)).getpixel((0, 0))  # type: ignore[misc]
+            rows.append([red, green, blue, red + green, green + blue, 255.0])
+        return torch.tensor(rows) / 255.0
+
+
+def tiny_model_from_config(config: ModelConfig, clip_dim: int) -> ClipCaptionModel:
+    """Build a tiny captioning model the way the pipeline builds the real one."""
+    mapper = build_mapper(config, clip_dim, TINY_GPT_DIM)
+    return ClipCaptionModel(make_tiny_gpt2(seed=0), mapper, freeze_gpt2=config.freeze_gpt2)
+
+
+def make_offline_components() -> Components:
+    """Return pipeline components that need neither network nor pretrained weights."""
+    tokenizer = WordTokenizer()  # shared, so that training and decoding agree on ids
+    return Components(
+        encoder=lambda config, device: ColourEncoder(),
+        tokenizer=lambda config: tokenizer,
+        model=tiny_model_from_config,
+    )
