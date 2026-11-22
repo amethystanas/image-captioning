@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+import shutil
 from collections.abc import Iterable, Sized
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Protocol
 
 import torch
@@ -16,6 +18,42 @@ from clipcap.models.clipcap import ClipCaptionModel
 from clipcap.utils import get_logger, resolve_device, seed_everything
 
 logger = get_logger(__name__)
+
+LAST_CHECKPOINT = "last.pt"
+BEST_CHECKPOINT = "best.pt"
+_CHECKPOINT_VERSION = 1
+
+
+class CheckpointError(RuntimeError):
+    """Raised when a checkpoint is unreadable or does not fit the run."""
+
+
+def read_checkpoint(path: str | Path) -> dict[str, Any]:
+    """Read a checkpoint file written by :meth:`Trainer.save_checkpoint`."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"checkpoint not found: {path}")
+    try:
+        checkpoint: dict[str, Any] = torch.load(path, map_location="cpu", weights_only=True)
+        version = checkpoint["version"]
+    except Exception as exc:
+        raise CheckpointError(f"{path} is not a valid checkpoint: {exc!r}") from exc
+    if version != _CHECKPOINT_VERSION:
+        raise CheckpointError(f"{path}: unsupported checkpoint version {version}")
+    return checkpoint
+
+
+def load_model_weights(path: str | Path, model: ClipCaptionModel) -> TrainingState:
+    """Load only the model weights of a checkpoint, for evaluation or inference.
+
+    Returns the training state stored with them (epoch, validation loss, history).
+    """
+    checkpoint = read_checkpoint(path)
+    try:
+        model.load_checkpoint_state(checkpoint["model"])
+    except ValueError as exc:
+        raise CheckpointError(f"{path}: {exc}") from exc
+    return TrainingState.from_dict(checkpoint["state"])
 
 
 class BatchLoader(Iterable[CaptionBatch], Sized, Protocol):
@@ -106,10 +144,69 @@ class Trainer:
         )
         self.use_amp = config.mixed_precision and self.device.type == "cuda"
         self.scaler = torch.amp.GradScaler(self.device.type, enabled=self.use_amp)
+        self.output_dir = Path(config.output_dir)
+
+    @property
+    def last_checkpoint(self) -> Path:
+        """Checkpoint written at the end of every epoch."""
+        return self.output_dir / LAST_CHECKPOINT
+
+    @property
+    def best_checkpoint(self) -> Path:
+        """Copy of the checkpoint with the lowest validation loss."""
+        return self.output_dir / BEST_CHECKPOINT
+
+    def save_checkpoint(self, path: Path) -> None:
+        """Write everything needed to resume training, atomically."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint = {
+            "version": _CHECKPOINT_VERSION,
+            "model": self.model.checkpoint_state(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict(),
+            "state": self.state.to_dict(),
+            "total_steps": self.total_steps,
+        }
+        temporary = path.with_name(path.name + ".tmp")
+        torch.save(checkpoint, temporary)
+        temporary.replace(path)
+
+    def load_checkpoint(self, path: Path) -> None:
+        """Restore weights, optimiser, schedule and progress from ``path``."""
+        checkpoint = read_checkpoint(path)
+        if checkpoint["total_steps"] != self.total_steps:
+            raise CheckpointError(
+                f"{path} comes from a run of {checkpoint['total_steps']} steps, this one has "
+                f"{self.total_steps}: epochs and batch size must match to resume"
+            )
+        try:
+            self.model.load_checkpoint_state(checkpoint["model"])
+            self.optimizer.load_state_dict(checkpoint["optimizer"])
+        except ValueError as exc:
+            raise CheckpointError(f"{path}: {exc}") from exc
+        self.scheduler.load_state_dict(checkpoint["scheduler"])
+        self.scaler.load_state_dict(checkpoint["scaler"])
+        self.state = TrainingState.from_dict(checkpoint["state"])
+
+    def resume(self) -> bool:
+        """Continue from the last checkpoint of the output directory, if any.
+
+        Returns whether a checkpoint was found and loaded.
+        """
+        if not self.last_checkpoint.is_file():
+            return False
+        self.load_checkpoint(self.last_checkpoint)
+        logger.info("resumed from %s at epoch %d", self.last_checkpoint, self.state.epoch)
+        return True
 
     def fit(self) -> TrainingState:
-        """Train until ``config.epochs`` is reached or validation stops improving."""
-        while self.state.epoch < self.config.epochs:
+        """Train until ``config.epochs`` is reached or validation stops improving.
+
+        A checkpoint is written after every epoch, and copied to
+        :attr:`best_checkpoint` whenever the validation loss improves.
+        """
+        while self.state.epoch < self.config.epochs and not self.should_stop():
             epoch = self.state.epoch + 1
             # Reseeding per epoch makes the data order a function of (seed, epoch)
             # alone, so a resumed run sees the batches an uninterrupted one would.
@@ -187,6 +284,9 @@ class Trainer:
             state.epochs_without_improvement = 0
         else:
             state.epochs_without_improvement += 1
+        self.save_checkpoint(self.last_checkpoint)
+        if state.best_epoch == metrics.epoch:
+            shutil.copyfile(self.last_checkpoint, self.best_checkpoint)
         self._on_epoch(metrics)
 
     def _on_step(self, loss: float) -> None:

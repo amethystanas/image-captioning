@@ -83,6 +83,42 @@ class ClipCaptionModel(nn.Module):
         """Return the parameters an optimiser should update."""
         return [parameter for parameter in self.parameters() if parameter.requires_grad]
 
+    def checkpoint_state(self) -> dict[str, Tensor]:
+        """Return the weights worth saving.
+
+        A frozen GPT-2 is identical to the pretrained checkpoint, so only the
+        mapper is kept, which makes checkpoints a few megabytes instead of
+        half a gigabyte.
+        """
+        state = self.state_dict()
+        if self.freeze_gpt2:
+            state = {name: value for name, value in state.items() if not name.startswith("gpt2.")}
+        return state
+
+    def load_checkpoint_state(self, state: dict[str, Tensor]) -> None:
+        """Load weights produced by :meth:`checkpoint_state`.
+
+        Raises ``ValueError`` when the weights do not fit this model, for
+        instance a mapper-only checkpoint loaded into a fine-tuned GPT-2.
+        """
+        expected = self.checkpoint_state()
+        missing, unexpected = sorted(set(expected) - set(state)), sorted(set(state) - set(expected))
+        if missing or unexpected:
+            raise ValueError(
+                "checkpoint does not match the model: "
+                f"{len(missing)} missing key(s) {missing[:3]}, "
+                f"{len(unexpected)} unexpected key(s) {unexpected[:3]}"
+            )
+        mismatched = [name for name, value in expected.items() if value.shape != state[name].shape]
+        if mismatched:
+            name = mismatched[0]
+            raise ValueError(
+                f"checkpoint does not match the model: {len(mismatched)} tensor(s) of a different "
+                f"shape, e.g. '{name}' is {tuple(state[name].shape)} instead of "
+                f"{tuple(expected[name].shape)}"
+            )
+        self.load_state_dict(state, strict=False)
+
     def embed_tokens(self, tokens: Tensor) -> Tensor:
         """Return the GPT-2 input embeddings of ``tokens``."""
         embedded: Tensor = self.gpt2.get_input_embeddings()(tokens)

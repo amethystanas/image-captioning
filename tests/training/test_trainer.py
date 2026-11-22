@@ -1,5 +1,6 @@
 import itertools
 import math
+from pathlib import Path
 
 import pytest
 import torch
@@ -9,12 +10,22 @@ from clipcap.config import TrainingConfig
 from clipcap.data.dataset import CaptionBatch, CaptionDataset
 from clipcap.models.clipcap import ClipCaptionModel
 from clipcap.training.trainer import (
+    CheckpointError,
     EpochMetrics,
     Trainer,
     TrainingState,
     linear_warmup_decay,
+    load_model_weights,
+    read_checkpoint,
 )
 from tests.helpers import WordTokenizer, make_features, make_tiny_model
+
+
+@pytest.fixture(autouse=True)
+def _isolated_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Checkpoints go to a relative ``outputs/`` directory: keep it out of the repository."""
+    monkeypatch.chdir(tmp_path)
+
 
 SUBJECTS = ("dog", "cat", "boy", "girl", "man", "bird", "horse", "child")
 
@@ -210,3 +221,150 @@ def test_training_state_round_trip() -> None:
     )
     assert TrainingState.from_dict(state.to_dict()) == state
     assert state.history[0].val_perplexity == pytest.approx(math.exp(1.5))
+
+
+def _weights(trainer: Trainer) -> dict[str, torch.Tensor]:
+    return {name: value.clone() for name, value in trainer.model.state_dict().items()}
+
+
+def _assert_same_weights(first: dict[str, torch.Tensor], second: dict[str, torch.Tensor]) -> None:
+    assert first.keys() == second.keys()
+    for name, value in first.items():
+        assert torch.equal(value, second[name]), name
+
+
+def test_checkpoints_are_written_every_epoch_and_best_is_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trainer = make_trainer(epochs=3)
+    losses = iter([2.0, 1.0, 1.5])
+    monkeypatch.setattr(trainer, "evaluate", lambda: next(losses))
+    trainer.fit()
+
+    assert sorted(path.name for path in trainer.output_dir.iterdir()) == ["best.pt", "last.pt"]
+    assert read_checkpoint(trainer.last_checkpoint)["state"]["epoch"] == 3
+    assert read_checkpoint(trainer.best_checkpoint)["state"]["epoch"] == 2
+
+
+@pytest.mark.parametrize("freeze_gpt2", [True, False])
+def test_interrupted_run_resumes_to_the_same_result(
+    monkeypatch: pytest.MonkeyPatch, freeze_gpt2: bool
+) -> None:
+    def trainer_for(directory: str) -> Trainer:
+        return make_trainer(
+            model=make_tiny_model(freeze_gpt2=freeze_gpt2), epochs=4, output_dir=directory
+        )
+
+    reference = trainer_for("reference")
+    reference.fit()
+
+    interrupted = trainer_for("resumed")
+    original_evaluate = interrupted.evaluate
+
+    def evaluate_then_crash() -> float:
+        if interrupted.state.epoch == 2:
+            raise KeyboardInterrupt
+        return original_evaluate()
+
+    monkeypatch.setattr(interrupted, "evaluate", evaluate_then_crash)
+    with pytest.raises(KeyboardInterrupt):
+        interrupted.fit()
+    assert interrupted.state.epoch == 2
+
+    resumed = trainer_for("resumed")
+    assert resumed.resume() is True
+    assert resumed.state.epoch == 2
+    resumed.fit()
+
+    assert resumed.state == reference.state
+    _assert_same_weights(_weights(resumed), _weights(reference))
+    assert resumed.optimizer.state_dict()["state"].keys() == (
+        reference.optimizer.state_dict()["state"].keys()
+    )
+    assert resumed.scheduler.get_last_lr() == reference.scheduler.get_last_lr()
+
+
+def test_resume_without_checkpoint_starts_from_scratch() -> None:
+    trainer = make_trainer()
+    assert trainer.resume() is False
+    assert trainer.state.epoch == 0
+
+
+def test_resuming_a_finished_run_does_nothing() -> None:
+    make_trainer(epochs=2).fit()
+    trainer = make_trainer(epochs=2)
+    trainer.resume()
+    before = _weights(trainer)
+    assert trainer.fit().epoch == 2
+    _assert_same_weights(_weights(trainer), before)
+
+
+def test_resuming_an_early_stopped_run_does_not_train_further(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = make_trainer(epochs=10, patience=1)
+    losses = iter([1.0, 2.0])
+    monkeypatch.setattr(first, "evaluate", lambda: next(losses))
+    assert first.fit().epoch == 2
+
+    second = make_trainer(epochs=10, patience=1)
+    second.resume()
+    assert second.fit().epoch == 2
+
+
+def test_frozen_gpt2_is_left_out_of_checkpoints() -> None:
+    frozen = make_trainer(model=make_tiny_model(freeze_gpt2=True), epochs=1, output_dir="frozen")
+    tuned = make_trainer(model=make_tiny_model(freeze_gpt2=False), epochs=1, output_dir="tuned")
+    frozen.fit()
+    tuned.fit()
+    frozen_keys = read_checkpoint(frozen.last_checkpoint)["model"].keys()
+    tuned_keys = read_checkpoint(tuned.last_checkpoint)["model"].keys()
+    assert frozen_keys
+    assert all(key.startswith("mapper.") for key in frozen_keys)
+    assert any(key.startswith("gpt2.") for key in tuned_keys)
+    assert frozen.last_checkpoint.stat().st_size < tuned.last_checkpoint.stat().st_size
+
+
+def test_load_model_weights_restores_the_best_model() -> None:
+    trainer = make_trainer(model=make_tiny_model(freeze_gpt2=True), epochs=2)
+    trainer.fit()
+    fresh = make_tiny_model(freeze_gpt2=True, seed=0)
+    state = load_model_weights(trainer.best_checkpoint, fresh)
+    assert state.epoch == trainer.state.best_epoch
+    assert state.best_val_loss == trainer.state.best_val_loss
+    if trainer.state.best_epoch == trainer.state.epoch:
+        _assert_same_weights(fresh.state_dict(), trainer.model.state_dict())
+
+
+def test_checkpoint_of_another_architecture_is_refused() -> None:
+    trainer = make_trainer(model=make_tiny_model(freeze_gpt2=True), epochs=1)
+    trainer.fit()
+    with pytest.raises(CheckpointError, match="does not match the model"):
+        load_model_weights(trainer.last_checkpoint, make_tiny_model(freeze_gpt2=False))
+    with pytest.raises(CheckpointError, match="does not match the model"):
+        load_model_weights(trainer.last_checkpoint, make_tiny_model(prefix_length=5))
+
+
+def test_resuming_with_another_architecture_is_refused() -> None:
+    make_trainer(model=make_tiny_model(prefix_length=3), epochs=1).fit()
+    other = make_trainer(model=make_tiny_model(prefix_length=5), epochs=1)
+    with pytest.raises(CheckpointError, match="tensor\\(s\\) of a different shape"):
+        other.resume()
+
+
+def test_resuming_with_a_different_schedule_is_refused() -> None:
+    make_trainer(epochs=2).fit()
+    with pytest.raises(CheckpointError, match="epochs and batch size must match"):
+        make_trainer(epochs=5).resume()
+
+
+def test_unreadable_checkpoints_are_reported(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="checkpoint not found"):
+        read_checkpoint(tmp_path / "absent.pt")
+    broken = tmp_path / "broken.pt"
+    broken.write_bytes(b"garbage")
+    with pytest.raises(CheckpointError, match="not a valid checkpoint"):
+        read_checkpoint(broken)
+    torch.save({"version": 99}, broken)
+    with pytest.raises(CheckpointError, match="unsupported checkpoint version 99"):
+        read_checkpoint(broken)
