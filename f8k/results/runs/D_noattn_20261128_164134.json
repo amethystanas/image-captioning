@@ -1,0 +1,100 @@
+{
+  "name": "D_noattn",
+  "date": "2026-11-28T16:41:34",
+  "status": "ok",
+  "time_min": 1.11,
+  "gpu_peak_mb": 1049,
+  "git_commit": "3135831",
+  "config": {
+    "epochs": 10,
+    "batch_size": 64,
+    "lr": 0.0004,
+    "emb_dim": 256,
+    "hidden": 512,
+    "att_dim": 256,
+    "dropout": 0.5,
+    "att_reg": 1.0,
+    "max_len": 22,
+    "no_attention": true,
+    "n_train": null,
+    "no_meteor": false,
+    "seed": 42
+  },
+  "metrics": {
+    "BLEU-1": 0.6127,
+    "BLEU-2": 0.4399,
+    "BLEU-3": 0.3028,
+    "BLEU-4": 0.2047,
+    "ROUGE-L": 0.4667,
+    "CIDEr": 0.5287,
+    "METEOR": 0.2081,
+    "CLIPScore": 0.7028,
+    "n_images": 1000,
+    "best_epoch": 10,
+    "best_val_CIDEr": 0.4868,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 4.1443,
+        "val_BLEU-4": 0.1298,
+        "val_CIDEr": 0.2843
+      },
+      {
+        "epoch": 2,
+        "train_loss": 3.3039,
+        "val_BLEU-4": 0.1521,
+        "val_CIDEr": 0.3749
+      },
+      {
+        "epoch": 3,
+        "train_loss": 3.0028,
+        "val_BLEU-4": 0.1594,
+        "val_CIDEr": 0.4163
+      },
+      {
+        "epoch": 4,
+        "train_loss": 2.8005,
+        "val_BLEU-4": 0.1685,
+        "val_CIDEr": 0.4425
+      },
+      {
+        "epoch": 5,
+        "train_loss": 2.6432,
+        "val_BLEU-4": 0.18,
+        "val_CIDEr": 0.4668
+      },
+      {
+        "epoch": 6,
+        "train_loss": 2.5124,
+        "val_BLEU-4": 0.1904,
+        "val_CIDEr": 0.4782
+      },
+      {
+        "epoch": 7,
+        "train_loss": 2.4005,
+        "val_BLEU-4": 0.1869,
+        "val_CIDEr": 0.4781
+      },
+      {
+        "epoch": 8,
+        "train_loss": 2.3007,
+        "val_BLEU-4": 0.1793,
+        "val_CIDEr": 0.4717
+      },
+      {
+        "epoch": 9,
+        "train_loss": 2.2107,
+        "val_BLEU-4": 0.1814,
+        "val_CIDEr": 0.4649
+      },
+      {
+        "epoch": 10,
+        "train_loss": 2.1243,
+        "val_BLEU-4": 0.1869,
+        "val_CIDEr": 0.4868
+      }
+    ]
+  },
+  "params_total": 10478060,
+  "params_trainable": 10478060
+}

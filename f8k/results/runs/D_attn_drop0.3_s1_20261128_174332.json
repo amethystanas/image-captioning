@@ -1,0 +1,100 @@
+{
+  "name": "D_attn_drop0.3_s1",
+  "date": "2026-11-28T17:43:32",
+  "status": "ok",
+  "time_min": 1.77,
+  "gpu_peak_mb": 1058,
+  "git_commit": "3135831",
+  "config": {
+    "epochs": 10,
+    "batch_size": 64,
+    "lr": 0.0004,
+    "emb_dim": 256,
+    "hidden": 512,
+    "att_dim": 256,
+    "dropout": 0.3,
+    "att_reg": 1.0,
+    "max_len": 22,
+    "no_attention": false,
+    "n_train": null,
+    "no_meteor": false,
+    "seed": 1
+  },
+  "metrics": {
+    "BLEU-1": 0.6011,
+    "BLEU-2": 0.4303,
+    "BLEU-3": 0.2966,
+    "BLEU-4": 0.2018,
+    "ROUGE-L": 0.4652,
+    "CIDEr": 0.5502,
+    "METEOR": 0.2099,
+    "CLIPScore": 0.7053,
+    "n_images": 1000,
+    "best_epoch": 5,
+    "best_val_CIDEr": 0.5138,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 4.6216,
+        "val_BLEU-4": 0.1528,
+        "val_CIDEr": 0.3263
+      },
+      {
+        "epoch": 2,
+        "train_loss": 3.7455,
+        "val_BLEU-4": 0.173,
+        "val_CIDEr": 0.4334
+      },
+      {
+        "epoch": 3,
+        "train_loss": 3.4119,
+        "val_BLEU-4": 0.1818,
+        "val_CIDEr": 0.4663
+      },
+      {
+        "epoch": 4,
+        "train_loss": 3.1829,
+        "val_BLEU-4": 0.1845,
+        "val_CIDEr": 0.4688
+      },
+      {
+        "epoch": 5,
+        "train_loss": 3.0015,
+        "val_BLEU-4": 0.1888,
+        "val_CIDEr": 0.5138
+      },
+      {
+        "epoch": 6,
+        "train_loss": 2.8481,
+        "val_BLEU-4": 0.1923,
+        "val_CIDEr": 0.5092
+      },
+      {
+        "epoch": 7,
+        "train_loss": 2.7138,
+        "val_BLEU-4": 0.1863,
+        "val_CIDEr": 0.4992
+      },
+      {
+        "epoch": 8,
+        "train_loss": 2.595,
+        "val_BLEU-4": 0.1875,
+        "val_CIDEr": 0.4858
+      },
+      {
+        "epoch": 9,
+        "train_loss": 2.4832,
+        "val_BLEU-4": 0.1908,
+        "val_CIDEr": 0.4977
+      },
+      {
+        "epoch": 10,
+        "train_loss": 2.3805,
+        "val_BLEU-4": 0.1764,
+        "val_CIDEr": 0.499
+      }
+    ]
+  },
+  "params_total": 10478060,
+  "params_trainable": 10478060
+}
